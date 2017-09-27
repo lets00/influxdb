@@ -57,8 +57,11 @@ func (s *Size) UnmarshalText(text []byte) error {
 	// no suffix (and is then just raw bytes)
 	mult := int64(1)
 
+	// Preserve the original text for error messages
+	sizeText := text
+
 	// Parse unit of measure
-	suffix := text[len(text)-1]
+	suffix := text[len(sizeText)-1]
 	if !unicode.IsDigit(rune(suffix)) {
 		switch suffix {
 		case 'k', 'K':
@@ -70,24 +73,24 @@ func (s *Size) UnmarshalText(text []byte) error {
 		default:
 			return fmt.Errorf("unknown size suffix: %c", suffix)
 		}
-		text = text[:len(text)-1]
+		sizeText = sizeText[:len(sizeText)-1]
 	}
 
 	// Parse numeric portion of value.
-	size, err := strconv.ParseInt(string(text), 10, 64)
+	size, err := strconv.ParseInt(string(sizeText), 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid size: %s", string(text))
 	}
 
 	if maxInt/mult < size {
-		return fmt.Errorf("size would overflow an int: %s", string(text))
+		return fmt.Errorf("size would overflow the max size (%d) of an int: %s", maxInt, string(text))
 	}
 
 	size *= mult
 
 	// Check for overflow.
 	if size > maxInt {
-		return fmt.Errorf("size %d cannot be represented by an int", size)
+		return fmt.Errorf("size %d is too large", size)
 	}
 
 	*s = Size(size)
