@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode"
 )
 
 // maxInt is the largest integer representable by a word (architecture dependent).
@@ -42,27 +43,47 @@ func (d Duration) MarshalText() (text []byte, err error) {
 }
 
 // Size represents a TOML parseable file size.
-// Users can specify size using "m" for megabytes and "g" for gigabytes.
-type Size int
+// Users can specify size using "k" or "K" for kibibytes, "m" or "M" for mebibytes,
+// and "g" or "G" for gibibytes. If a size suffix isn't specified then bytes are assumed.
+type Size uint64
 
 // UnmarshalText parses a byte size from text.
 func (s *Size) UnmarshalText(text []byte) error {
-	// Parse numeric portion of value.
-	length := len(string(text))
-	size, err := strconv.ParseInt(string(text[:length-1]), 10, 64)
-	if err != nil {
-		return err
+	if len(text) == 0 {
+		return fmt.Errorf("size was empty")
 	}
 
-	// Parse unit of measure ("m", "g", etc).
-	switch suffix := text[len(text)-1]; suffix {
-	case 'm':
-		size *= 1 << 20 // MB
-	case 'g':
-		size *= 1 << 30 // GB
-	default:
-		return fmt.Errorf("unknown size suffix: %c", suffix)
+	// The multiplier defaults to 1 in case the size has
+	// no suffix (and is then just raw bytes)
+	mult := int64(1)
+
+	// Parse unit of measure
+	suffix := text[len(text)-1]
+	if !unicode.IsDigit(rune(suffix)) {
+		switch suffix {
+		case 'k', 'K':
+			mult = 1 << 10 // KiB
+		case 'm', 'M':
+			mult = 1 << 20 // MiB
+		case 'g', 'G':
+			mult = 1 << 30 // GiB
+		default:
+			return fmt.Errorf("unknown size suffix: %c", suffix)
+		}
+		text = text[:len(text)-1]
 	}
+
+	// Parse numeric portion of value.
+	size, err := strconv.ParseInt(string(text), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid size: %s", string(text))
+	}
+
+	if maxInt/mult < size {
+		return fmt.Errorf("size would overflow an int: %s", string(text))
+	}
+
+	size *= mult
 
 	// Check for overflow.
 	if size > maxInt {

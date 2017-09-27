@@ -2,6 +2,7 @@ package toml_test
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,23 +12,59 @@ import (
 	itoml "github.com/influxdata/influxdb/toml"
 )
 
-// Ensure that megabyte sizes can be parsed.
-func TestSize_UnmarshalText_MB(t *testing.T) {
+func TestSize_UnmarshalText(t *testing.T) {
 	var s itoml.Size
-	if err := s.UnmarshalText([]byte("200m")); err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	} else if s != 200*(1<<20) {
-		t.Fatalf("unexpected size: %d", s)
+	for _, test := range []struct {
+		str  string
+		want int64
+	}{
+		{"1", 1},
+		{"10", 10},
+		{"100", 100},
+		{"1k", 1 << 10},
+		{"10k", 10 << 10},
+		{"100k", 100 << 10},
+		{"1K", 1 << 10},
+		{"10K", 10 << 10},
+		{"100K", 100 << 10},
+		{"1m", 1 << 20},
+		{"10m", 10 << 20},
+		{"100m", 100 << 20},
+		{"1M", 1 << 20},
+		{"10M", 10 << 20},
+		{"100M", 100 << 20},
+		{"1g", 1 << 30},
+		{"10g", 10 << 30},
+		{"100g", 100 << 30},
+		{"1G", 1 << 30},
+		{"10G", 10 << 30},
+		{"100G", 100 << 30},
+		{"1000G", 1000 << 30},
+		{"10000G", 10000 << 30},
+	} {
+		if err := s.UnmarshalText([]byte(test.str)); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if s != itoml.Size(test.want) {
+			t.Fatalf("wanted: %d got: %d", test.want, s)
+		}
 	}
-}
 
-// Ensure that gigabyte sizes can be parsed.
-func TestSize_UnmarshalText_GB(t *testing.T) {
-	var s itoml.Size
-	if err := s.UnmarshalText([]byte("1g")); err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	} else if s != 1073741824 {
-		t.Fatalf("unexpected size: %d", s)
+	// Copy this from the toml package
+	maxInt := int64(^uint(0) >> 1)
+
+	for _, str := range []string{
+		fmt.Sprintf("%dk", maxInt-1),
+		"10000000000000000000g",
+		"abcdef",
+		"1KB",
+		"√m",
+		"a1",
+		"",
+	} {
+		if err := s.UnmarshalText([]byte(str)); err == nil {
+			t.Fatalf("input should have failed: %s", str)
+		}
 	}
 }
 
