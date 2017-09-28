@@ -15,7 +15,6 @@ import (
 
 	"strings"
 
-	"github.com/gogo/protobuf/codec"
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/models"
@@ -140,8 +139,7 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	opts := []yarpc.DialOption{yarpc.WithCodec(codec.New(1000))}
-	conn, err := yarpc.Dial(cmd.addr, opts...)
+	conn, err := yarpc.Dial(cmd.addr)
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,6 @@ package storage
 import (
 	"net"
 
-	"github.com/gogo/protobuf/codec"
 	"github.com/influxdata/yarpc"
 	"github.com/uber-go/zap"
 )
@@ -38,7 +37,7 @@ func (s *yarpcServer) Close() error {
 }
 
 func (s *yarpcServer) serve() {
-	s.rpc = yarpc.NewServer(yarpc.CustomCodec(codec.New(1000)))
+	s.rpc = yarpc.NewServer()
 	RegisterStorageServer(s.rpc, &rpcService{Store: s.Store, Logger: s.Logger})
 	s.Logger.Info("yarpc listening", zap.String("address", s.ln.Addr().String()))
 	s.rpc.Serve(s.ln)
