@@ -38,8 +38,6 @@ func TestSize_UnmarshalText(t *testing.T) {
 		{"100M", 100 << 20},
 		{"1g", 1 << 30},
 		{"1G", 1 << 30},
-		{"2g", 2 << 30},
-		{"2G", 2 << 30},
 		{fmt.Sprint(maxInt - 1), maxInt - 1},
 	} {
 		if err := s.UnmarshalText([]byte(test.str)); err != nil {
