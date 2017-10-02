@@ -308,6 +308,10 @@ func extractFields(itr query.FloatIterator) []string {
 		}
 	}
 
+	if len(a) == 0 {
+		return a
+	}
+
 	sort.Strings(a)
 	i := 1
 	// TODO(sgc): skip whilst a[i] != a[i-1] to avoid unnecessary copying
