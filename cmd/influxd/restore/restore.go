@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"compress/gzip"
 	"github.com/influxdata/influxdb/cmd/influxd/backup"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/services/snapshotter"
@@ -273,12 +274,54 @@ func (cmd *Command) unpackFiles(pat string) error {
 	}
 
 	for _, fn := range backupFiles {
-		if err := cmd.unpackTar(fn); err != nil {
+		if err := cmd.unpackGzip(fn); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// unpackGzip will restore a single tar archive to the data dir
+func (cmd *Command) unpackGzip(gzFile string) error {
+	f, err := os.Open(gzFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	for {
+		zr.Multistream(false)
+
+		destinationFile, err := cmd.prepareDestinationFile(zr.Name)
+		if err != nil {
+			return err
+		}
+		ff, err := os.Create(destinationFile)
+		if err != nil {
+			return err
+		}
+		defer ff.Close()
+
+		if _, err := io.Copy(ff, zr); err != nil {
+			return err
+		}
+
+		err = zr.Reset(f)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+
 }
 
 // unpackTar will restore a single tar archive to the data dir
@@ -299,14 +342,50 @@ func (cmd *Command) unpackTar(tarFile string) error {
 			return err
 		}
 
-		if err := cmd.unpackFile(tr, hdr.Name); err != nil {
+		if err := cmd.unpackTarFile(tr, hdr.Name); err != nil {
 			return err
 		}
 	}
 }
 
-// unpackFile will copy the current file from the tar archive to the data dir
-func (cmd *Command) unpackFile(tr *tar.Reader, fileName string) error {
+// unpackTarFile will copy the current file from the tar archive to the data dir
+func (cmd *Command) unpackTarFile(tr *tar.Reader, fileName string) error {
+	nativeFileName := filepath.FromSlash(fileName)
+	fn := filepath.Join(cmd.datadir, nativeFileName)
+	fmt.Printf("unpacking %s\n", fn)
+
+	if err := os.MkdirAll(filepath.Dir(fn), 0777); err != nil {
+		return fmt.Errorf("error making restore dir: %s", err.Error())
+	}
+
+	ff, err := os.Create(fn)
+	if err != nil {
+		return err
+	}
+	defer ff.Close()
+
+	if _, err := io.Copy(ff, tr); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (cmd *Command) prepareDestinationFile(fileName string) (string, error) {
+	nativeFileName := filepath.FromSlash(fileName)
+	fn := filepath.Join(cmd.datadir, nativeFileName)
+	fmt.Printf("unpacking %s\n", fn)
+
+	if err := os.MkdirAll(filepath.Dir(fn), 0777); err != nil {
+		return "", fmt.Errorf("error making restore dir: %s", err.Error())
+	}
+
+	return fn, nil
+
+}
+
+// unpackTarFile will copy the current file from the tar archive to the data dir
+func (cmd *Command) unpackGzipFile(tr *tar.Reader, fileName string) error {
 	nativeFileName := filepath.FromSlash(fileName)
 	fn := filepath.Join(cmd.datadir, nativeFileName)
 	fmt.Printf("unpacking %s\n", fn)
