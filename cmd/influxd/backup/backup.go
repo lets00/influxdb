@@ -97,6 +97,7 @@ func (cmd *Command) Run(args ...string) error {
 		if err := cmd.extractMetastore(""); err != nil {
 			return err
 		}
+
 		cmd.StdoutLogger.Printf("No database, retention policy or shard ID given. Full meta store backed up.")
 	}
 
