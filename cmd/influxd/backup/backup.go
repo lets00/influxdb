@@ -87,7 +87,7 @@ func (cmd *Command) Run(args ...string) error {
 		} else if cmd.database != "" {
 			err = cmd.extractDatabase()
 		} else {
-			return errors.New("no database, retention policy or shard ID given")
+			cmd.StdoutLogger.Printf("No database, retention policy or shard ID given. Full meta store backed up.")
 		}
 
 		if err != nil {
@@ -152,13 +152,7 @@ func (cmd *Command) parseFlags(args []string) (err error) {
 		}
 	}
 
-	// some validations
-	// 1.  -database is required
-	if cmd.database == "" {
-		return errors.New("-database <dbname> is a required argument")
-	}
-
-	// 2.  start should be < end
+	// start should be < end
 	if cmd.start.After(cmd.end) {
 		return errors.New("start date must be before end date")
 	}
@@ -306,7 +300,8 @@ func (cmd *Command) extractMetastore() error {
 	cmd.StdoutLogger.Printf("backing up metastore to %s", metastoreArchivePath)
 
 	req := &snapshotter.Request{
-		Type: snapshotter.RequestMetastoreBackup,
+		Type:     snapshotter.RequestMetastoreBackup,
+		Database: cmd.database,
 	}
 
 	return cmd.downloadAndVerify(req, metastoreArchivePath, func(file string) error {
