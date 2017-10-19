@@ -73,29 +73,38 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	// always backup the metastore
-	if err := cmd.extractMetastore(); err != nil {
-		return err
-	}
-
-	if cmd.isBackup {
-		// based on the arguments passed in we only backup the minimum
-		if cmd.shardID != "" {
-			err = cmd.extractShard(cmd.retentionPolicy, cmd.shardID)
-		} else if cmd.retentionPolicy != "" {
-			err = cmd.extractRetentionPolicy()
-		} else if cmd.database != "" {
-			err = cmd.extractDatabase()
-		} else {
-			cmd.StdoutLogger.Printf("No database, retention policy or shard ID given. Full meta store backed up.")
-		}
-
-		if err != nil {
-			cmd.StderrLogger.Printf("backup failed: %v", err)
+	if cmd.shardID != "" {
+		// always backup the metastore
+		if err := cmd.extractMetastore(cmd.database); err != nil {
 			return err
 		}
-		cmd.StdoutLogger.Printf("backup complete")
+		err = cmd.extractShard(cmd.retentionPolicy, cmd.shardID)
+
+	} else if cmd.retentionPolicy != "" {
+		// always backup the metastore
+		if err := cmd.extractMetastore(cmd.database); err != nil {
+			return err
+		}
+		err = cmd.extractRetentionPolicy()
+	} else if cmd.database != "" {
+		// always backup the metastore
+		if err := cmd.extractMetastore(cmd.database); err != nil {
+			return err
+		}
+		err = cmd.extractDatabase()
+	} else {
+		// always backup the metastore
+		if err := cmd.extractMetastore(""); err != nil {
+			return err
+		}
+		cmd.StdoutLogger.Printf("No database, retention policy or shard ID given. Full meta store backed up.")
 	}
+
+	if err != nil {
+		cmd.StderrLogger.Printf("backup failed: %v", err)
+		return err
+	}
+	cmd.StdoutLogger.Printf("backup complete")
 
 	return nil
 }
@@ -291,7 +300,7 @@ func (cmd *Command) extractResponsePaths(response *snapshotter.Response) error {
 }
 
 // extractMetastore will backup the whole metastore on the host to the passed in path.
-func (cmd *Command) extractMetastore() error {
+func (cmd *Command) extractMetastore(useDB string) error {
 	metastoreArchivePath, err := cmd.nextPath(filepath.Join(cmd.path, Metafile))
 	if err != nil {
 		return err
@@ -301,7 +310,7 @@ func (cmd *Command) extractMetastore() error {
 
 	req := &snapshotter.Request{
 		Type:     snapshotter.RequestMetastoreBackup,
-		Database: cmd.database,
+		Database: useDB,
 	}
 
 	return cmd.downloadAndVerify(req, metastoreArchivePath, func(file string) error {
