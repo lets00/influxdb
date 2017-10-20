@@ -15,6 +15,7 @@ import (
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tsdb"
+	"github.com/pkg/errors"
 	"github.com/uber-go/zap"
 )
 
@@ -37,7 +38,6 @@ type Service struct {
 	MetaClient interface {
 		encoding.BinaryMarshaler
 		Database(name string) *meta.DatabaseInfo
-		Data() *meta.Data
 	}
 
 	TSDBStore *tsdb.Store
@@ -87,6 +87,7 @@ func (s *Service) serve() {
 	for {
 		// Wait for next connection.
 		conn, err := s.Listener.Accept()
+
 		if err != nil && strings.Contains(err.Error(), "connection closed") {
 			s.Logger.Info("snapshot listener closed")
 			return
@@ -109,7 +110,7 @@ func (s *Service) serve() {
 
 // handleConn processes conn. This is run in a separate goroutine.
 func (s *Service) handleConn(conn net.Conn) error {
-	r, err := s.readRequest(conn)
+	r, bytes, err := s.readRequest(conn)
 	if err != nil {
 		return fmt.Errorf("read request: %s", err)
 	}
@@ -131,9 +132,42 @@ func (s *Service) handleConn(conn net.Conn) error {
 		return s.writeDatabaseInfo(conn, r.Database)
 	case RequestRetentionPolicyInfo:
 		return s.writeRetentionPolicyInfo(conn, r.Database, r.RetentionPolicy)
+
+	case RequestMetaStoreUpdate:
+		fmt.Println("!!!!!!!! updating metastore")
+		return updateMetaStore(conn, bytes)
 	default:
 		return fmt.Errorf("request type unknown: %v", r.Type)
 	}
+
+	return nil
+}
+func updateMetaStore(conn net.Conn, bits []byte) error {
+
+	//bits := make([]byte, request.UploadSize)
+	//n, err := conn.Read(bits)
+
+	//if err != nil {
+	//	return err
+	//}
+
+	var numBytes [16]byte
+	binary.BigEndian.PutUint64(numBytes[:8], BackupMagicHeader)
+	binary.BigEndian.PutUint64(numBytes[8:16], uint64(len(bits)))
+
+	fmt.Printf("!!!!!!!! writing %d bytes back", len(bits))
+	if _, err := conn.Write(numBytes[:]); err != nil {
+		return err
+	}
+
+	md := meta.Data{}
+	err := md.UnmarshalBinary(bits)
+	if err != nil {
+		fmt.Printf("failed to decode meta: %s", err)
+		return err
+	}
+
+	fmt.Printf("decoded meta: %v", md)
 
 	return nil
 }
@@ -142,7 +176,9 @@ func (s *Service) writeMetaStore(conn net.Conn, dbName string) error {
 	// Retrieve and serialize the current meta data.
 	// if the dbName is non-empty, then we drop all the DB's from the metadata
 	// that aren't being exported.
-	data := s.MetaClient.Data()
+
+	x := s.MetaClient.(*meta.Client)
+	data := x.Data()
 
 	if dbName != "" {
 		keepDB := data.Database(dbName)
@@ -267,12 +303,37 @@ func (s *Service) writeRetentionPolicyInfo(conn net.Conn, database, retentionPol
 }
 
 // readRequest unmarshals a request object from the conn.
-func (s *Service) readRequest(conn net.Conn) (Request, error) {
+func (s *Service) readRequest(conn net.Conn) (Request, []byte, error) {
 	var r Request
-	if err := json.NewDecoder(conn).Decode(&r); err != nil {
-		return r, err
+	d := json.NewDecoder(conn)
+
+	if err := d.Decode(&r); err != nil {
+		return r, []byte{}, err
 	}
-	return r, nil
+
+	bits := make([]byte, r.UploadSize)
+	fmt.Printf("len bits: %d", len(bits))
+
+	fmt.Printf("upload size: %d\n", r.UploadSize)
+	if r.UploadSize > 0 {
+
+		d.Buffered().Read(bits)
+
+		n, err := d.Buffered().Read(bits)
+
+		fmt.Printf("read %d bytes\n", n)
+
+		n, err = conn.Read(bits[n:])
+
+		fmt.Printf("read %d bytes\n", n)
+
+		if err != nil {
+			return r, bits, err
+		}
+
+	}
+
+	return r, bits, nil
 }
 
 // RequestType indicates the typeof snapshot request.
@@ -294,6 +355,10 @@ const (
 	// RequestShardExport represents a request to export Shard data.  Similar to a backup, but shards
 	// may be filtered based on the start/end times on each block.
 	RequestShardExport
+
+	// RequestMetaStoreUpdate represents a request to upload a metafile that will be used to do a live update
+	// to the existing metastore.
+	RequestMetaStoreUpdate
 )
 
 // Request represents a request for a specific backup or for information
@@ -306,6 +371,7 @@ type Request struct {
 	Since           time.Time
 	ExportStart     time.Time
 	ExportEnd       time.Time
+	UploadSize      int64
 }
 
 // Response contains the relative paths for all the shards on this server

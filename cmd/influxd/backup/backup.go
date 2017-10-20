@@ -161,11 +161,11 @@ func (cmd *Command) parseFlags(args []string) (err error) {
 		if err != nil {
 			return err
 		}
-	}
 
-	// start should be < end
-	if !cmd.start.Before(cmd.end) {
-		return errors.New("start date must be before end date")
+		// start should be < end
+		if !cmd.start.Before(cmd.end) {
+			return errors.New("start date must be before end date")
+		}
 	}
 
 	// Ensure that only one arg is specified.

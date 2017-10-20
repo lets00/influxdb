@@ -4,26 +4,37 @@ package restore
 
 import (
 	"archive/tar"
-	"bytes"
 	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"github.com/influxdata/influxdb/cmd/influxd/backup"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/services/snapshotter"
+	"github.com/influxdata/influxdb/tcp"
+	"log"
+	"time"
 )
 
 // Command represents the program execution for "influxd restore".
 type Command struct {
-	Stdout io.Writer
+	// The logger passed to the ticker during execution.
+	StdoutLogger *log.Logger
+	StderrLogger *log.Logger
+
+	// Standard input/output, overridden for testing.
 	Stderr io.Writer
+	Stdout io.Writer
+
+	host string
+	path string
 
 	backupFilesPath string
 	metadir         string
@@ -47,6 +58,10 @@ func NewCommand() *Command {
 
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
+	// Set up logger.
+	cmd.StdoutLogger = log.New(cmd.Stdout, "", log.LstdFlags)
+	cmd.StderrLogger = log.New(cmd.Stderr, "", log.LstdFlags)
+
 	if err := cmd.parseFlags(args); err != nil {
 		return err
 	}
@@ -70,6 +85,7 @@ func (cmd *Command) Run(args ...string) error {
 // parseFlags parses and validates the command line arguments.
 func (cmd *Command) parseFlags(args []string) error {
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	fs.StringVar(&cmd.host, "host", "localhost:8088", "")
 	fs.StringVar(&cmd.metadir, "metadir", "", "")
 	fs.StringVar(&cmd.datadir, "datadir", "", "")
 	fs.StringVar(&cmd.database, "database", "", "")
@@ -130,87 +146,95 @@ func (cmd *Command) unpackMeta() error {
 
 	fmt.Fprintf(cmd.Stdout, "Using metastore snapshot: %v\n", latest)
 	// Read the metastore backup
-	f, err := os.Open(latest)
-	if err != nil {
-		return err
+	req := &snapshotter.Request{
+		Type:     snapshotter.RequestMetaStoreUpdate,
+		Database: cmd.database,
 	}
-
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, f); err != nil {
-		return fmt.Errorf("copy: %s", err)
-	}
-
-	b := buf.Bytes()
-	var i int
-
-	// Make sure the file is actually a meta store backup file
-	magic := binary.BigEndian.Uint64(b[:8])
-	if magic != snapshotter.BackupMagicHeader {
-		return fmt.Errorf("invalid metadata file")
-	}
-	i += 8
-
-	// Size of the meta store bytes
-	length := int(binary.BigEndian.Uint64(b[i : i+8]))
-	i += 8
-	metaBytes := b[i : i+length]
-	i += int(length)
-
-	// Size of the node.json bytes
-	length = int(binary.BigEndian.Uint64(b[i : i+8]))
-	i += 8
-	nodeBytes := b[i : i+length]
-
-	// Unpack into metadata.
-	var data meta.Data
-	if err := data.UnmarshalBinary(metaBytes); err != nil {
-		return fmt.Errorf("unmarshal: %s", err)
-	}
-
-	// Copy meta config and remove peers so it starts in single mode.
-	c := cmd.MetaConfig
-	c.Dir = cmd.metadir
-
-	// Create the meta dir
-	if os.MkdirAll(c.Dir, 0700); err != nil {
-		return err
-	}
-
-	// Write node.json back to meta dir
-	if err := ioutil.WriteFile(filepath.Join(c.Dir, "node.json"), nodeBytes, 0655); err != nil {
-		return err
-	}
-
-	client := meta.NewClient(c)
-	if err := client.Open(); err != nil {
-		return err
-	}
-	defer client.Close()
-
-	// Force set the full metadata.
-	if err := client.SetData(&data); err != nil {
-		return fmt.Errorf("set data: %s", err)
-	}
-
-	// remove the raft.db file if it exists
-	err = os.Remove(filepath.Join(cmd.metadir, "raft.db"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	// remove the node.json file if it exists
-	err = os.Remove(filepath.Join(cmd.metadir, "node.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
+	cmd.upload(req, latest)
 
 	return nil
+
+	//f, err := os.Open(latest)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//var buf bytes.Buffer
+	//if _, err := io.Copy(&buf, f); err != nil {
+	//	return fmt.Errorf("copy: %s", err)
+	//}
+	//
+	//b := buf.Bytes()
+	//var i int
+	//
+	//// Make sure the file is actually a meta store backup file
+	//magic := binary.BigEndian.Uint64(b[:8])
+	//if magic != snapshotter.BackupMagicHeader {
+	//	return fmt.Errorf("invalid metadata file")
+	//}
+	//i += 8
+	//
+	//// Size of the meta store bytes
+	//length := int(binary.BigEndian.Uint64(b[i : i+8]))
+	//i += 8
+	//metaBytes := b[i : i+length]
+	//i += int(length)
+	//
+	//// Size of the node.json bytes
+	//length = int(binary.BigEndian.Uint64(b[i : i+8]))
+	//i += 8
+	//nodeBytes := b[i : i+length]
+	//
+	//// Unpack into metadata.
+	//var data meta.Data
+	//if err := data.UnmarshalBinary(metaBytes); err != nil {
+	//	return fmt.Errorf("unmarshal: %s", err)
+	//}
+	//
+	//// Copy meta config and remove peers so it starts in single mode.
+	//c := cmd.MetaConfig
+	//c.Dir = cmd.metadir
+	//
+	//// Create the meta dir
+	//if os.MkdirAll(c.Dir, 0700); err != nil {
+	//	return err
+	//}
+	//
+	//// Write node.json back to meta dir
+	//if err := ioutil.WriteFile(filepath.Join(c.Dir, "node.json"), nodeBytes, 0655); err != nil {
+	//	return err
+	//}
+	//
+	//client := meta.NewClient(c)
+	//if err := client.Open(); err != nil {
+	//	return err
+	//}
+	//defer client.Close()
+	//
+	//// Force set the full metadata.
+	//if err := client.SetData(&data); err != nil {
+	//	return fmt.Errorf("set data: %s", err)
+	//}
+	//
+	//// remove the raft.db file if it exists
+	//err = os.Remove(filepath.Join(cmd.metadir, "raft.db"))
+	//if err != nil {
+	//	if os.IsNotExist(err) {
+	//		return nil
+	//	}
+	//	return err
+	//}
+	//
+	//// remove the node.json file if it exists
+	//err = os.Remove(filepath.Join(cmd.metadir, "node.json"))
+	//if err != nil {
+	//	if os.IsNotExist(err) {
+	//		return nil
+	//	}
+	//	return err
+	//}
+	//
+	//return nil
 }
 
 // unpackShard will look for all backup files in the path matching this shard ID
@@ -405,6 +429,57 @@ func (cmd *Command) unpackGzipFile(tr *tar.Reader, fileName string) error {
 	}
 
 	return nil
+}
+
+// upload takes a request object, attaches a Base64 encoding to the request, and sends it to the snapshotter service.
+func (cmd *Command) upload(req *snapshotter.Request, path string) error {
+	// Create local file to write to.
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("opening file: %s", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	req.UploadSize = info.Size()
+
+	for i := 0; i < 10; i++ {
+		if err = func() error {
+			// Connect to snapshotter service.
+			conn, err := tcp.Dial("tcp", cmd.host, snapshotter.MuxHeader)
+			if err != nil {
+				return err
+			}
+			//defer conn.Close()
+
+			// Write the request
+			if err := json.NewEncoder(conn).Encode(req); err != nil {
+				return fmt.Errorf("encode snapshot request: %s", err)
+			}
+
+			if n, err := io.CopyN(conn, f, info.Size()); err != nil || n != req.UploadSize {
+				return fmt.Errorf("error uploading file: err=%v, n=%d, uploadSize: %d", err, n, req.UploadSize)
+			}
+
+			//var response bytes.Buffer
+			//// Read snapshot from the connection
+			cmd.StdoutLogger.Printf("wrote %d bytes", req.UploadSize)
+			var b bytes.Buffer
+
+			if n, err := b.ReadFrom(conn); err != nil || n == 0 {
+				return fmt.Errorf("copy backup to file: err=%v, n=%d", err, n)
+			}
+			cmd.StdoutLogger.Printf("result: %d, %d", binary.BigEndian.Uint64(b.Bytes()[:8]), binary.BigEndian.Uint64(b.Bytes()[8:]))
+
+			return nil
+		}(); err == nil {
+			break
+		} else if err != nil {
+			cmd.StderrLogger.Printf("Upload file %v failed %s.  Retrying (%d)...\n", path, err, i)
+			time.Sleep(time.Second)
+		}
+	}
+
+	return err
 }
 
 // printUsage prints the usage message to STDERR.
